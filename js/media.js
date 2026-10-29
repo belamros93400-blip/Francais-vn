@@ -2,32 +2,69 @@
 "use strict";
 
 /* ------------------------------------------------------------------ voix (synthese vocale de l'iPhone) */
+/* Par defaut on NE choisit PAS de voix : l'iPhone utilise sa voix francaise systeme (toujours installee).
+   Forcer une voix de la liste peut rendre l'app muette si cette voix n'est pas telechargee (constate sur iPhone recents).
+   L'utilisateur peut choisir une voix dans Reglages ; si elle ne demarre pas, on reessaie sans voix. */
 const Voice = {
-  voice: null,
   ok: "speechSynthesis" in window,
-  pick() {
-    if (!this.ok) return;
-    const vs = speechSynthesis.getVoices().filter(v => /^fr[-_]/i.test(v.lang) || v.lang === "fr");
-    this.voice = vs.find(v => /fr[-_]FR/i.test(v.lang) && v.localService) || vs.find(v => /fr[-_]FR/i.test(v.lang)) || vs[0] || null;
+  chosen: "",            // voiceURI choisi par l'utilisateur ("" = voix systeme)
+  current: null,         // garde une reference (sinon WebKit peut perdre l'enonce)
+  onfail: null,
+  token: 0,
+  frVoices() {
+    if (!this.ok) return [];
+    return speechSynthesis.getVoices().filter(v => /^fr([-_]|$)/i.test(v.lang));
   },
-  init() {
+  init(chosen) {
     if (!this.ok) return;
-    this.pick();
-    speechSynthesis.onvoiceschanged = () => this.pick();
+    this.chosen = chosen || "";
+    try { speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged = () => {}; } catch (_) {}
+  },
+  _utter(text, slow, useChosen) {
+    const u = new SpeechSynthesisUtterance(String(text));
+    u.lang = "fr-FR";
+    u.volume = 1;
+    u.rate = slow ? 0.55 : 0.95;
+    if (useChosen && this.chosen) {
+      const v = this.frVoices().find(x => x.voiceURI === this.chosen);
+      if (v) u.voice = v;
+    }
+    return u;
   },
   speak(text, slow) {
     if (!this.ok || !text || !String(text).trim()) return false;
+    const synth = speechSynthesis;
+    const my = ++this.token;
+    const go = (useChosen, retry) => {
+      if (my !== this.token) return;
+      let started = false;
+      const u = this._utter(text, slow, useChosen);
+      u.onstart = () => { started = true; };
+      u.onerror = e => {
+        if (started || my !== this.token || (e && (e.error === "interrupted" || e.error === "canceled"))) return;
+        started = true;
+        if (retry) retry(); else if (this.onfail) this.onfail();
+      };
+      this.current = u;
+      try { synth.resume(); synth.speak(u); } catch (_) { if (this.onfail) this.onfail(); return; }
+      // garde-fou : si rien ne demarre, on relance une fois avec la voix systeme
+      setTimeout(() => {
+        if (started || my !== this.token) return;
+        try { synth.cancel(); } catch (_) {}
+        if (retry) setTimeout(retry, 150); else if (this.onfail) this.onfail();
+      }, 2500);
+    };
+    const first = () => this.chosen ? go(true, () => go(false, null)) : go(false, () => go(false, null));
     try {
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(String(text));
-      u.lang = "fr-FR";
-      if (this.voice) u.voice = this.voice;
-      u.rate = slow ? 0.55 : 0.95;
-      speechSynthesis.speak(u);
-      return true;
+      if (synth.speaking || synth.pending) { synth.cancel(); setTimeout(first, 150); }  // bug WebKit : cancel puis speak immediat
+      else first();
     } catch (_) { return false; }
+    return true;
   },
-  stop() { try { if (this.ok) speechSynthesis.cancel(); } catch (_) {} }
+  stop() {
+    this.token++;
+    try { if (this.ok && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel(); } catch (_) {}
+  }
 };
 
 /* ------------------------------------------------------------------ sons de jeu */
@@ -93,6 +130,9 @@ const Speech = {
     };
     try { r.start(); } catch (e) { return false; }
     this.rec = r;
+    // garde-fou (bug iOS : la reconnaissance peut rester bloquee apres un son)
+    clearTimeout(this.wd);
+    this.wd = setTimeout(() => { if (this.rec === r && !done) { try { r.abort(); } catch (_) {} if (!done) { done = true; this.rec = null; cb.onresult(finals.map(a => a[0])); } } }, 15000);
     return true;
   },
   stop(abort) {

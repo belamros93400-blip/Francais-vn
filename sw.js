@@ -1,5 +1,5 @@
 /* Service worker : met toute l'application en cache pour fonctionner sans Internet. */
-const VERSION = "efv-6ce199340d";
+const VERSION = "efv-789d14a7d7";
 const ASSETS = [
  "./",
  "index.html",

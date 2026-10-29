@@ -42,9 +42,15 @@ const EXTRA = {
   quit_q: { fr: "Quitter", vi: "Thoát" },
   remove_word: { fr: "Touchez un mot pour le retirer.", vi: "Chạm vào một từ để bỏ nó ra." },
   version: { fr: "Version", vi: "Phiên bản" },
+  voice_title: { fr: "🗣 Voix française", vi: "🗣 Giọng đọc tiếng Pháp" },
+  voice_system: { fr: "Voix française de l'iPhone (recommandé)", vi: "Giọng tiếng Pháp mặc định của iPhone (khuyên dùng)" },
+  voice_test: { fr: "▶ Tester : « Bonjour, je parle français. »", vi: "▶ Nghe thử: « Bonjour, je parle français. »" },
+  voice_found: { fr: "Voix françaises trouvées : {n}", vi: "Số giọng tiếng Pháp tìm thấy: {n}" },
+  voice_help: { fr: "Vous n'entendez rien ?\n• Désactivez le mode silencieux (iPhone 15 à 17 : bouton Action sur le côté, ou Centre de contrôle → cloche) et montez le volume.\n• Réglages iPhone → Accessibilité → Contenu énoncé → Voix → Français : téléchargez une voix (par ex. « Thomas » ou « Amélie »).\n• Puis fermez complètement l'application et rouvrez-la.",
+    vi: "Không nghe thấy gì?\n• Tắt chế độ im lặng (iPhone 15–17: nút Tác vụ bên cạnh máy, hoặc Trung tâm điều khiển → biểu tượng chuông) và tăng âm lượng.\n• Cài đặt iPhone → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Pháp: tải một giọng (ví dụ « Thomas » hoặc « Amélie »).\n• Sau đó đóng hẳn ứng dụng rồi mở lại." },
   update_ready: { fr: "Nouvelle version installée. Elle sera utilisée au prochain lancement.", vi: "Đã cài phiên bản mới. Sẽ dùng ở lần mở tiếp theo." }
 };
-const APP_VERSION = "0.17-ios.1";
+const APP_VERSION = "0.17-ios.2";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -434,8 +440,31 @@ function renderExercise(keep) {
   if (App.answered) { lockAnswer(); renderFeedback(); }
 }
 
+let voiceHelpShown = false;
 function say(text, slow) {
   if (!Voice.speak(text, slow)) toast(bi("no_voice"), 6000);
+}
+function voiceFailed() {
+  if (voiceHelpShown) { toast(t("voice_help").split("\n")[1], 5000); return; }
+  voiceHelpShown = true;
+  Modal.alert(esc(t("voice_help")), t("voice_title"));
+}
+function showVoice() {
+  const vs = Voice.frVoices();
+  const opts = [{ uri: "", label: t("voice_system") }].concat(vs.map(v => ({ uri: v.voiceURI, label: `${v.name} (${v.lang})` })));
+  const m = Modal.open(`<div class="mt">${esc(t("voice_title"))}</div>
+    <div class="muted" style="font-size:14px">${esc(t("voice_found", { n: vs.length }))}</div>
+    <div class="acts">${opts.map((o, i) => `<button class="btn small ${o.uri === Voice.chosen ? "" : "ghost"}" data-v="${i}">${esc(o.label)}</button>`).join("")}</div>
+    <div class="acts"><button class="btn" style="background:#0EA5E9" data-test>${esc(t("voice_test"))}</button></div>
+    <p class="mb note">${esc(t("voice_help"))}</p>
+    <div class="acts"><button class="btn ghost" data-c>${esc(t("close"))}</button></div>`);
+  $$("[data-v]", m.box).forEach(b => b.onclick = () => {
+    Voice.chosen = opts[+b.dataset.v].uri; Store.cfg.voice = Voice.chosen; Store.saveCfg();
+    $$("[data-v]", m.box).forEach(x => x.classList.toggle("ghost", x !== b));
+    Voice.speak("Bonjour, je parle français.");
+  });
+  $("[data-test]", m.box).onclick = () => Voice.speak("Bonjour, je parle français.");
+  $("[data-c]", m.box).onclick = m.close;
 }
 
 function renderBottom() {
@@ -1092,6 +1121,7 @@ function showMore() {
     ${item("cert", "🎓", t("a_certificate"))}
     ${item("photos_dl", "📷", t("a_photos_dl"))}
     ${item("photos", "🖼️", t("a_photos_show"), cfg.photos !== false)}
+    ${item("voice", "🗣", t("voice_title").replace("🗣 ", ""))}
     ${item("sound", "🔔", t("a_sound"), cfg.sound !== false)}
     ${item("about", "ℹ️", t("a_about"))}
     <p class="note">${esc(t("backup_tip"))}</p>
@@ -1113,6 +1143,7 @@ function showMore() {
     else if (a === "import") importProfile();
     else if (a === "cert") makeCertificate();
     else if (a === "photos_dl") downloadPhotos();
+    else if (a === "voice") showVoice();
     else if (a === "about") Modal.alert(`${esc(tr("fr", "about_text"))}<br><br><span class="vi">${esc(tr("vi", "about_text"))}</span><br><br>
       <b>${esc(t("install_title"))}</b><br>${esc(t("install_text"))}<br><br><span class="muted">${esc(t("version"))} ${APP_VERSION}${isStandalone() ? "<br>" + esc(t("offline_ok")) : ""}</span>`, t("a_about"));
   });
@@ -1192,7 +1223,7 @@ async function boot() {
     await Engine.init();
     Engine.setCustom(await Store.customList());
     await Photos.init();
-    Voice.init(); Sounds.init(); Sounds.enabled = Store.cfg.sound !== false;
+    Voice.init(Store.cfg.voice); Voice.onfail = voiceFailed; Sounds.init(); Sounds.enabled = Store.cfg.sound !== false;
     if (typeof DecompressionStream === "undefined") {
       html(root(), `<div class="splash">${biH("old_ios")}</div>`);
       return;
